@@ -1,0 +1,73 @@
+menu "FFS (Fixed File System)"
+
+config FFS_ENABLED
+	bool "Enable Fixed File System"
+	default n
+
+if FFS_ENABLED
+
+comment "Use ffs-flash make target for flashing"
+
+config FFS_MOUNT_POINT
+	string "Mount point for ESP VFS integration"
+	default "/mount/files/"
+
+config FFS_FILES_FOLDER_PATH
+    string "Path to folder with files to be uploaded, relative to Project Path"
+    default "files"
+
+config FFS_FILES_PARTITION
+    string "ESP Partition name to load the files into (exactly as in partition file!)"
+    default "data"
+
+config FFS_FILES_DEF_GROWSIZE
+	hex "Default grow boundary"
+	default (0x1000)
+	help
+		Default space boundary left for files to grow. Files will be left
+		up to (boundary_size - (file_size mod boundary)) bytes to grow.
+		Eg a 5913 bytes file with 4096 boundary can grow to 2279 bytes.
+
+		With 0x1000 (4K bytes) boundary, the write access is most optimal.
+
+config FFS_FILES_OPTIONS
+	string "Additional options to file loader"
+	default ""
+	help
+		This allows You to specifically control how the files are loaded,
+		the size they have to grow and specific load location, even outside
+		the partition. You can specify for multiple files, separated by space.
+
+		Specify loading point
+		1.
+		<file_name>=
+			[p:<partition_name>,o:<offset_within_partition>]
+		
+		Loads a file into a specific partition and offset, Use "max" for 
+		file specific grow value for the whole partition to be used.
+		Do not use the partition set in menuconfig. This is good for OTA.
+
+		2.
+		<file_name>=r:<raw_flash_offset>
+
+		Loads file at specific offset in flash memory.
+
+		Also specify file grow boundary (if bigger than current file size,
+		this will directly set maximum file size).
+
+		<file_name>=g:<growsize>
+		
+		Controls grow size for files loaded to main configured partition
+
+		Examples:
+		data1.out=g:4096 data2.out=p:data_files,g:1024
+		data3.out=r:0x100000
+		data4.out=p:ota_1,g:max
+
+		WARNING:
+		File position and size conflicts internally and within the wider
+		flash memory are NOT (yet) checked.
+
+endif
+
+endmenu
