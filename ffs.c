@@ -29,13 +29,13 @@
 	}
 
 #define FILE_METHOD_START(LOG) \
-	ESP_LOGD("FFS", "Entering (fd %d) " #LOG, fd); \
+	ESP_LOGV("FFS", "Entering (fd %d) " #LOG, fd); \
 	xSemaphoreTake(File_IO_Lock, portMAX_DELAY); \
 	if ((fd > 0) && (fd < ffs_end_of_list) \
 		&& (mptrs[fd].base_ptr != NULL)) {
 
 #define FILE_METHOD_STOP_RETURN(ret, LOG) \
-		ESP_LOGD("FFS", "Finishing (fd %d) " #LOG, fd); \
+		ESP_LOGV("FFS", "Finishing (fd %d) " #LOG, fd); \
 		xSemaphoreGive(File_IO_Lock); \
 		return ret; \
 	} else { \
@@ -72,7 +72,7 @@ struct ffs_open_file mptrs[ffs_end_of_list];
 size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	size_t bytes_to_write = 0;
 	FILE_METHOD_START(write)
-	ESP_LOGD("FFS", "Write called with %p %u, file %d at position %u", data, size, fd, mptrs[fd].position);
+	ESP_LOGV("FFS", "Write called with %p %u, file %d at position %u", data, size, fd, mptrs[fd].position);
 	if (!(mptrs[fd].flags & FWRITE)) {
 		errno = EACCES;
 		FILE_METHOD_RETURN(-1, write, W)
@@ -95,14 +95,14 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	    - file_start_address_in_flash;
 	bytes_to_write = min(space_left_for_file, min(size, bytes_within_page));
 	// read
-	ESP_LOGD("FFS", "Reading %x bytes at %x", FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start);
+	ESP_LOGV("FFS", "Reading %x bytes at %x", FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start);
 	esp_err_t r = spi_flash_read(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	FILE_CHECK_IF_SPI_OK(r)
 	// compare
-	ESP_LOGD("FFS", "Comparing %x bytes at %x", bytes_to_write, file_start_address_in_flash);
+	ESP_LOGV("FFS", "Comparing %x bytes at %x", bytes_to_write, file_start_address_in_flash);
 	if (memcmp(data, tmp + file_start_address_within_page, bytes_to_write) == 0) {
 		// what we want to write is already there so let's say we did
-		ESP_LOGD("FFS", "Data in Flash match data in buffer");
+		ESP_LOGV("FFS", "Data in Flash match data in buffer");
 		mptrs[fd].position += bytes_to_write;
 		free(tmp);
 		FILE_METHOD_RETURN(bytes_to_write, write, D)
@@ -110,11 +110,11 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	// copy
 	memcpy(tmp + file_start_address_within_page, data, bytes_to_write);
 	// erase
-	ESP_LOGD("FFS", "Erasing %x bytes at %x", FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start);
+	ESP_LOGV("FFS", "Erasing %x bytes at %x", FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start);
 	r = spi_flash_erase_range(file_start_address_page_start, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	FILE_CHECK_IF_SPI_OK(r)
 	// write
-	ESP_LOGD("FFS", "Writing %x bytes at %x", FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start);
+	ESP_LOGV("FFS", "Writing %x bytes at %x", FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start);
 	r = spi_flash_write(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	FILE_CHECK_IF_SPI_OK(r)
 	// release
@@ -125,7 +125,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 
 int ffs_interface_open(const char * path, int flags, int mode) {
 	int fd = 0;
-	ESP_LOGD("FFS", "Entering open %s, flags:0x%x mode:\\0%o", path, flags, mode);
+	ESP_LOGV("FFS", "Entering open %s, flags:0x%x mode:\\0%o", path, flags, mode);
 	xSemaphoreTake(File_IO_Lock, portMAX_DELAY);
 	struct ffs_file_meta * ref = ffs_get_file_meta(path);
 	if (ref == NULL) {
@@ -182,7 +182,7 @@ int ffs_interface_close(int fd) {
 ssize_t ffs_interface_read(int fd, void * dst, size_t size) {
 	size_t maxread = size;
 	FILE_METHOD_START(read)
-	ESP_LOGD("FFS", "Read called with %p %u, file %d at position %u", dst, size, fd, mptrs[fd].position);
+	ESP_LOGV("FFS", "Read called with %p %u, file %d at position %u", dst, size, fd, mptrs[fd].position);
 	if (!(mptrs[fd].flags & FREAD)) {
 		errno = EACCES;
 		FILE_METHOD_RETURN(-1, read, W)
@@ -232,7 +232,7 @@ off_t ffs_interface_lseek(int fd, off_t size, int mode) {
 
 int ffs_interface_stat(const char * path, struct stat * st) {
 	int fd = 0;
-	ESP_LOGD("FFS", "Entering stat %s", path);
+	ESP_LOGV("FFS", "Entering stat %s", path);
 	xSemaphoreTake(File_IO_Lock, portMAX_DELAY);
 	struct ffs_file_meta * ref = ffs_get_file_meta(path);
 	if (ref == NULL) {
