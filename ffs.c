@@ -72,6 +72,7 @@ struct ffs_open_file mptrs[ffs_end_of_list];
 size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	size_t bytes_to_write = 0;
 	FILE_METHOD_START(write)
+	ESP_LOGD("FFS", "Write called with %p %u, file %d at position %u", data, size, fd, mptrs[fd].position);
 	if (!(mptrs[fd].flags & FWRITE)) {
 		errno = EACCES;
 		FILE_METHOD_RETURN(-1, write, W)
@@ -84,7 +85,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	size_t space_left_for_file = ffs_file_metadata[fd].max_length
 	                             - mptrs[fd].position;
 	size_t file_start_address_in_flash
-	    = ffs_file_metadata[fd].flash_base_address + mptrs[fd].position;
+	    = ffs_file_metadata[fd].flash_base_address + mptrs[fd].position + ffs_file_metadata[fd].offset;
 	size_t file_start_address_page_start =
 	    file_start_address_in_flash & ~(FFS_ESP_FLASH_WRITE_BOUNDARY - 1);
 	size_t file_start_address_within_page =
@@ -94,11 +95,14 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	    - file_start_address_in_flash;
 	bytes_to_write = min(space_left_for_file, min(size, bytes_within_page));
 	// read
+	ESP_LOGD("FFS", "Reading %x bytes at %x", FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start);
 	esp_err_t r = spi_flash_read(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	FILE_CHECK_IF_SPI_OK(r)
 	// compare
+	ESP_LOGD("FFS", "Comparing %x bytes at %x", bytes_to_write, file_start_address_in_flash);
 	if (memcmp(data, tmp + file_start_address_within_page, bytes_to_write) == 0) {
 		// what we want to write is already there so let's say we did
+		ESP_LOGD("FFS", "Data in Flash match data in buffer");
 		mptrs[fd].position += bytes_to_write;
 		free(tmp);
 		FILE_METHOD_RETURN(bytes_to_write, write, D)
@@ -106,9 +110,11 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	// copy
 	memcpy(tmp + file_start_address_within_page, data, bytes_to_write);
 	// erase
+	ESP_LOGD("FFS", "Erasing %x bytes at %x", FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start);
 	r = spi_flash_erase_range(file_start_address_page_start, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	FILE_CHECK_IF_SPI_OK(r)
 	// write
+	ESP_LOGD("FFS", "Writing %x bytes at %x", FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start);
 	r = spi_flash_write(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	FILE_CHECK_IF_SPI_OK(r)
 	// release
@@ -135,7 +141,7 @@ int ffs_interface_open(const char * path, int flags, int mode) {
 	size_t align_start_address = ref->flash_base_address & ~(FFS_ESP_MAP_BOUNDARY - 1);
 	size_t align_start_offset = ref->offset + (ref->flash_base_address - align_start_address);
 	size_t align_length = ((align_start_offset + ref->max_length) | (FFS_ESP_MAP_BOUNDARY - 1)) + 1;
-	// open ;)
+	// quickopen
 	esp_err_t res = spi_flash_mmap(
 	                    align_start_address,
 	                    align_length,
@@ -144,11 +150,11 @@ int ffs_interface_open(const char * path, int flags, int mode) {
 	                    &(mptrs[ref->index].mmap_handle)
 	                );
 	if (res != ESP_OK) {
-		// no mmap, will resort to normal reads
+		// no luck with mmap, will resort to normal reads
 		mptrs[ref->index].base_ptr = (void*)0xffffffff;
 	} else {
 		// set the starting address right
-		mptrs[ref->index].base_ptr = mptrs[ref->index].base_ptr + align_start_offset;
+		mptrs[ref->index].base_ptr += align_start_offset;
 	}
 	mptrs[ref->index].position = 0;
 	mptrs[ref->index].flags = flags + 1;	// to get FREAD/FWRITE
@@ -176,6 +182,7 @@ int ffs_interface_close(int fd) {
 ssize_t ffs_interface_read(int fd, void * dst, size_t size) {
 	size_t maxread = size;
 	FILE_METHOD_START(read)
+	ESP_LOGD("FFS", "Read called with %p %u, file %d at position %u", dst, size, fd, mptrs[fd].position);
 	if (!(mptrs[fd].flags & FREAD)) {
 		errno = EACCES;
 		FILE_METHOD_RETURN(-1, read, W)
@@ -185,7 +192,7 @@ ssize_t ffs_interface_read(int fd, void * dst, size_t size) {
 	}
 	if (maxread) {
 		if (mptrs[fd].base_ptr == (void*)0xffffffff) {
-			spi_flash_read(ffs_file_metadata[fd].flash_base_address + mptrs[fd].position,
+			spi_flash_read(ffs_file_metadata[fd].flash_base_address + ffs_file_metadata[fd].offset + mptrs[fd].position,
 				dst, maxread);
 		} else {
 			memcpy(dst, mptrs[fd].base_ptr + mptrs[fd].position, maxread);
@@ -261,54 +268,8 @@ void ffs_initialize() {
 	ESP_ERROR_CHECK(esp_vfs_register(CONFIG_FFS_MOUNT_POINT, &ffs_vfs, NULL));
 }
 
-const char * ffs_mmap(void *addr,
-                      size_t len,
-                      int prot,
-                      int flags,
-                      int fd,
-                      off_t offset) {
-	ESP_LOGD("FFS", "Entering (fd %d) mmap", fd);
-	xSemaphoreTake(File_IO_Lock, portMAX_DELAY);
-	if ((fd > 0) && (fd < ffs_end_of_list)
-	        && (mptrs[fd].base_ptr != NULL)) {
-		if (offset > 0) {
-			errno = EINVAL;
-			FILE_METHOD_RETURN(0, mmap, W)
-		}
-		if (len > ffs_file_metadata[fd].max_length) {
-			errno = EINVAL;
-			FILE_METHOD_RETURN(0, mmap, W)
-		}
-		ESP_LOGD("FFS", "Finishing (fd %d) mmap", fd);
-		xSemaphoreGive(File_IO_Lock);
-		return mptrs[fd].base_ptr;
-	} else {
-		ESP_LOGW("FFS", "Invalid call (fd %d) mmap", fd);
-		xSemaphoreGive(File_IO_Lock);
-		errno = EBADF;
-		return NULL;
-	}
-}
-
-const char * ffs_munmap(void *addr, size_t len) {
-	return NULL;
-}
-
 #else
 
 void ffs_initialize() {}
-
-const char * ffs_munmap(void *addr, size_t len) {
-	return NULL;
-}
-
-const char * ffs_mmap(void *addr,
-                      size_t len,
-                      int prot,
-                      int flags,
-                      int fd,
-                      off_t offset) {
-	return NULL;
-}
 
 #endif
