@@ -67,6 +67,7 @@ struct ffs_file_meta * ffs_get_file_meta(const char * name) {
 
 SemaphoreHandle_t File_IO_Lock;
 
+char * tmp = NULL;
 struct ffs_open_file mptrs[ffs_end_of_list];
 
 size_t ffs_interface_write(int fd, const void * data, size_t size) {
@@ -77,7 +78,6 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 		errno = EACCES;
 		FILE_METHOD_RETURN(-1, write, W)
 	}
-	char * tmp = malloc(FFS_ESP_FLASH_WRITE_BOUNDARY);
 	if (!tmp) {
 		errno = ENOMEM;
 		FILE_METHOD_RETURN(-1, write, E)
@@ -85,7 +85,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	size_t space_left_for_file = ffs_file_metadata[fd].max_length
 	                             - mptrs[fd].position;
 	size_t file_start_address_in_flash
-	    = ffs_file_metadata[fd].flash_base_address + mptrs[fd].position + ffs_file_metadata[fd].offset;
+	    = ffs_file_metadata[fd].flash_base_address + ffs_file_metadata[fd].offset + mptrs[fd].position;
 	size_t file_start_address_page_start =
 	    file_start_address_in_flash & ~(FFS_ESP_FLASH_WRITE_BOUNDARY - 1);
 	size_t file_start_address_within_page =
@@ -104,9 +104,10 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 		// what we want to write is already there so let's say we did
 		ESP_LOGV("FFS", "Data in Flash match data in buffer");
 		mptrs[fd].position += bytes_to_write;
-		free(tmp);
 		FILE_METHOD_RETURN(bytes_to_write, write, D)
 	}
+	// invalidate the MMAP reference, if any
+	mptrs[fd].base_ptr = (void*)0xffffffff;
 	// copy
 	memcpy(tmp + file_start_address_within_page, data, bytes_to_write);
 	// erase
@@ -119,7 +120,6 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	FILE_CHECK_IF_SPI_OK(r)
 	// release
 	mptrs[fd].position += bytes_to_write;
-	free(tmp);
 	FILE_METHOD_STOP_RETURN(bytes_to_write, write)
 }
 
@@ -141,16 +141,19 @@ int ffs_interface_open(const char * path, int flags, int mode) {
 	size_t align_start_address = ref->flash_base_address & ~(FFS_ESP_MAP_BOUNDARY - 1);
 	size_t align_start_offset = ref->offset + (ref->flash_base_address - align_start_address);
 	size_t align_length = ((align_start_offset + ref->max_length) | (FFS_ESP_MAP_BOUNDARY - 1)) + 1;
-	// quickopen
-	esp_err_t res = spi_flash_mmap(
-	                    align_start_address,
-	                    align_length,
-	                    SPI_FLASH_MMAP_DATA,
-	                    (void*) & (mptrs[ref->index].base_ptr),
-	                    &(mptrs[ref->index].mmap_handle)
-	                );
+	// open ;)
+	esp_err_t res = ESP_FAIL;
+	if (1) {	// need to test this concept better, and consider SPI Cache
+		res = spi_flash_mmap(
+		          align_start_address,
+		          align_length,
+		          SPI_FLASH_MMAP_DATA,
+		          (void*) & (mptrs[ref->index].base_ptr),
+		          &(mptrs[ref->index].mmap_handle)
+		      );
+	}
 	if (res != ESP_OK) {
-		// no luck with mmap, will resort to normal reads
+		// no mmap, will resort to direct spi reads
 		mptrs[ref->index].base_ptr = (void*)0xffffffff;
 	} else {
 		// set the starting address right
@@ -175,7 +178,10 @@ int ffs_interface_close(int fd) {
 	FILE_METHOD_START(close)
 	mptrs[fd].base_ptr = NULL;
 	mptrs[fd].flags = 0;
-	spi_flash_munmap(mptrs[fd].mmap_handle);
+	if (mptrs[fd].mmap_handle) {
+		spi_flash_munmap(mptrs[fd].mmap_handle);
+		mptrs[fd].mmap_handle = 0;
+	}
 	FILE_METHOD_STOP_RETURN(0, close)
 }
 
@@ -193,7 +199,7 @@ ssize_t ffs_interface_read(int fd, void * dst, size_t size) {
 	if (maxread) {
 		if (mptrs[fd].base_ptr == (void*)0xffffffff) {
 			spi_flash_read(ffs_file_metadata[fd].flash_base_address + ffs_file_metadata[fd].offset + mptrs[fd].position,
-				dst, maxread);
+			               dst, maxread);
 		} else {
 			memcpy(dst, mptrs[fd].base_ptr + mptrs[fd].position, maxread);
 		}
@@ -263,7 +269,10 @@ esp_vfs_t ffs_vfs = {
 };
 
 void ffs_initialize() {
+	if (tmp != NULL)
+		return; // already initialized
 	File_IO_Lock = xSemaphoreCreateMutex();
+	tmp = malloc(FFS_ESP_FLASH_WRITE_BOUNDARY);
 	memset(mptrs, 0, sizeof (struct ffs_open_file) * ffs_end_of_list);
 	ESP_ERROR_CHECK(esp_vfs_register(CONFIG_FFS_MOUNT_POINT, &ffs_vfs, NULL));
 }
