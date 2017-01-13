@@ -67,7 +67,6 @@ struct ffs_file_meta * ffs_get_file_meta(const char * name) {
 
 SemaphoreHandle_t File_IO_Lock;
 
-char * tmp = NULL;
 struct ffs_open_file mptrs[ffs_end_of_list];
 
 size_t ffs_interface_write(int fd, const void * data, size_t size) {
@@ -78,6 +77,8 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 		errno = EACCES;
 		FILE_METHOD_RETURN(-1, write, W)
 	}
+	char * tmp = NULL;
+	tmp = malloc(FFS_ESP_FLASH_WRITE_BOUNDARY);
 	if (!tmp) {
 		errno = ENOMEM;
 		FILE_METHOD_RETURN(-1, write, E)
@@ -103,6 +104,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	if (memcmp(data, tmp + file_start_address_within_page, bytes_to_write) == 0) {
 		// what we want to write is already there so let's say we did
 		ESP_LOGV("FFS", "Data in Flash match data in buffer");
+		free(tmp);
 		mptrs[fd].position += bytes_to_write;
 		FILE_METHOD_RETURN(bytes_to_write, write, D)
 	}
@@ -119,6 +121,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	r = spi_flash_write(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	FILE_CHECK_IF_SPI_OK(r)
 	// release
+	free(tmp);
 	mptrs[fd].position += bytes_to_write;
 	FILE_METHOD_STOP_RETURN(bytes_to_write, write)
 }
@@ -269,10 +272,7 @@ esp_vfs_t ffs_vfs = {
 };
 
 void ffs_initialize() {
-	if (tmp != NULL)
-		return; // already initialized
 	File_IO_Lock = xSemaphoreCreateMutex();
-	tmp = malloc(FFS_ESP_FLASH_WRITE_BOUNDARY);
 	memset(mptrs, 0, sizeof (struct ffs_open_file) * ffs_end_of_list);
 	ESP_ERROR_CHECK(esp_vfs_register(CONFIG_FFS_MOUNT_POINT, &ffs_vfs, NULL));
 }
