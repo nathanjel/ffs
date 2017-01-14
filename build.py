@@ -53,19 +53,22 @@ output_h = sys.argv[2]
 output_m = sys.argv[3]
 output_b = sys.argv[4]
 part_file = sys.argv[5]
-partition = sys.argv[6]
+partition_name = sys.argv[6]
 increment = int(sys.argv[7], 0)
 
 ## load partition table
 table = PartitionTable.from_csv(open(part_file,'r').read())
 
 ## find referenced main partition
-sadr = table[partition].offset
+sadr = table[partition_name].offset
 offset = 0
-filldata = bytearray(table[partition].size)
+partition = table[partition_name]
+filldata = bytearray(partition.size)
 
 for (dirpath, dirnames, filenames) in os.walk(folder):
 	files.extend([os.path.normpath(os.path.relpath(os.path.join(dirpath,item),folder)) for item in filenames])
+
+files.sort()
 
 print "FFS files found: %s" % files
 
@@ -93,7 +96,7 @@ for file in files:
 	blocks *= increment
 
 	addoffset = 1
-	other_partition = 0
+	curr_partition = partition
 	basename = os.path.basename(file)
 	check = basename + "="
 
@@ -108,7 +111,7 @@ for file in files:
 					blocks += 1
 					blocks *= opts.growsize
 	
-				if (opts.growsize == -2):
+				if ((opts.growsize == -2) and (opts.partition != "")):
 					blocks = flen // table[opts.partition].size
 					blocks += 1
 					blocks *= table[opts.partition].size
@@ -117,24 +120,28 @@ for file in files:
 					fstart = table[opts.partition].offset
 					foffset = opts.offset
 					addoffset = 0
-					other_partition = 1
+					curr_partition = table[opts.partition]
 	
 				if (opts.raw_flash_offset >= 0):
-					fstart = opts.raw_flash_offset
-					foffset = 0
+					fstart = 0
+					foffset = opts.raw_flash_offset
 					addoffset = 0
+					curr_partition = None
 
 	if addoffset:
 		offset += blocks
 
 	h_enum += "%s, \\\n" % fn
-	h_def += "\t\t{ \"%s\", %s, %d, %d, 0x%x, 0x%x }, \\\n" % (file, fn, flen, blocks, fstart, foffset)
+	if (curr_partition is None):
+		h_def += "\t\t{ \"%s\", %s, %d, %d, %s, %d, %d, 0x%x }, \\\n" % (file, fn, flen, blocks, "NULL", 0, 0, foffset)
+	else:
+		h_def += "\t\t{ \"%s\", %s, %d, %d, %s, %d, %d, 0x%x }, \\\n" % (file, fn, flen, blocks, "\"" + curr_partition.name + "\"", curr_partition.type, curr_partition.subtype, foffset)
 	
 	if (flen>0):
-		if (other_partition):
-			outm.write(" 0x%x %s " % (fstart + foffset, fullname))
-		else:
+		if (curr_partition == partition):
 			filldata[foffset:foffset+flen-1] = inbytes[0:flen-1]
+		else:
+			outm.write(" 0x%x %s " % (fstart + foffset, fullname))
 
 h_enum += "\n"
 h_def += "\n"
@@ -142,7 +149,7 @@ h_def += "\n"
 outh.write(h_enum)
 outh.write(h_def)
 
-outm.write(" 0x%x %s " % (fstart, output_b))
+outm.write(" 0x%x %s " % (partition.offset, output_b))
 
 outb.write(filldata)
 
