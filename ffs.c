@@ -6,10 +6,7 @@
 #include "esp_partition.h"
 
 #include "freertos/FreeRTOS.h"
-#include "freertos/xtensa_api.h"
-#include "freertos/queue.h"
 #include "freertos/semphr.h"
-#include "freertos/task.h"
 
 #include <dirent.h>
 #include "stdio.h"
@@ -99,8 +96,6 @@
 	xSemaphoreGive(File_IO_Lock); \
 	return value;
 
-static portMUX_TYPE ffs_mux = portMUX_INITIALIZER_UNLOCKED;
-
 struct ffs_file_meta ffs_file_metadata[] = {
 	FFS_FILE_METADATA
 	{ NULL, 0, 0, 0, 0, 0, 0, 0 }
@@ -166,7 +161,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	         FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start,
 	         (mptrs[fd].partition_ptr == NULL) ? "" : " partition ",
 	         ffs_file_metadata[fd].plabel);
-	esp_err_t 
+	esp_err_t r;
 	if (mptrs[fd].partition_ptr == NULL) {
 		r = spi_flash_read(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	} else {
@@ -189,7 +184,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	ESP_LOGV("FFS", "Erasing %x bytes at %x%s%s",
 	         FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start,
 	         (mptrs[fd].partition_ptr == NULL) ? "" : " partition ",
-	         ffs_file_metadata[fd].plabel
+	         ffs_file_metadata[fd].plabel);
 	if (mptrs[fd].partition_ptr == NULL) {
 		r = spi_flash_erase_range(file_start_address_page_start, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	} else {
@@ -201,7 +196,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	ESP_LOGV("FFS", "Writing %x bytes at %x%s%s",
 	         FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start,
 	         (mptrs[fd].partition_ptr == NULL) ? "" : " partition ",
-	         ffs_file_metadata[fd].plabel
+	         ffs_file_metadata[fd].plabel);
 	if (mptrs[fd].partition_ptr == NULL) {
 		r = spi_flash_write(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	} else {
