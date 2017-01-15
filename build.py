@@ -42,117 +42,126 @@ class Option(object):
 				if opt[0:1] == 'r':
 					self.raw_flash_offset = int(opt[2:],0)
 
-
-## init
-files = []
-partitions = []
-
-## parameters
-folder = sys.argv[1]
-output_h = sys.argv[2]
-output_m = sys.argv[3]
-output_b = sys.argv[4]
-part_file = sys.argv[5]
-partition_name = sys.argv[6]
-increment = int(sys.argv[7], 0)
-
-## load partition table
-table = PartitionTable.from_csv(open(part_file,'r').read())
-
-## find referenced main partition
-sadr = table[partition_name].offset
-offset = 0
-partition = table[partition_name]
-filldata = bytearray(partition.size)
-
-for (dirpath, dirnames, filenames) in os.walk(folder):
-	files.extend([os.path.normpath(os.path.relpath(os.path.join(dirpath,item),folder)) for item in filenames])
-
-files.sort()
-
-print "FFS files found: %s" % files
-
-outh = open(output_h, 'w')
-outm = open(output_m, 'w')
-outb = open(output_b, 'wb')
-
-h_enum = "#define FFS_FILE_LIST \\\n"
-h_def = "#define FFS_FILE_METADATA \\\n"
-
-for file in files:
-	fullname = os.path.join(folder, file)
-	fh = open(fullname, 'rb')
-	inbytes = bytearray(fh.read())
-	flen = len(inbytes)
-	fh.close()
-	fn = re.sub("[^A-Za-z0-9]", "_", file)
-	file = "/" + file.replace(os.pathsep, "/")
-
-	fstart = sadr
-	foffset = offset
-
-	blocks = flen // increment
-	blocks += 1
-	blocks *= increment
-
-	addoffset = 1
-	curr_partition = partition
-	basename = os.path.basename(file)
-	check = basename + "="
-
-	for arg in sys.argv:
-		wlist = arg.split(' ')
-		for w in wlist:
-			if w.startswith(check):
-				opts = Option(w[len(check):])
-
-				if (opts.growsize >= 0):
-					blocks = flen // opts.growsize
-					blocks += 1
-					blocks *= opts.growsize
+def MainCode():
+	## init
+	files = []
+	partitions = []
 	
-				if ((opts.growsize == -2) and (opts.partition != "")):
-					blocks = flen // table[opts.partition].size
-					blocks += 1
-					blocks *= table[opts.partition].size
+	## parameters
+	folder = sys.argv[1]
+	output_h = sys.argv[2]
+	output_m = sys.argv[3]
+	output_b = sys.argv[4]
+	part_file = sys.argv[5]
+	partition_name = sys.argv[6]
+	increment = int(sys.argv[7], 0)
 	
-				if (opts.partition != ""):
-					fstart = table[opts.partition].offset
-					foffset = opts.offset
-					addoffset = 0
-					curr_partition = table[opts.partition]
+	## load partition table
+	table = PartitionTable.from_csv(open(part_file,'r').read())
 	
-				if (opts.raw_flash_offset >= 0):
-					fstart = 0
-					foffset = opts.raw_flash_offset
-					addoffset = 0
-					curr_partition = None
-
-	if addoffset:
-		offset += blocks
-
-	h_enum += "%s, \\\n" % fn
-	if (curr_partition is None):
-		h_def += "\t\t{ \"%s\", %s, %d, %d, %s, %d, %d, 0x%x }, \\\n" % (file, fn, flen, blocks, "NULL", 0, 0, foffset)
-	else:
-		h_def += "\t\t{ \"%s\", %s, %d, %d, %s, %d, %d, 0x%x }, \\\n" % (file, fn, flen, blocks, "\"" + curr_partition.name + "\"", curr_partition.type, curr_partition.subtype, foffset)
+	## find referenced main partition
+	main_partition = table[partition_name]
+	sadr = main_partition.offset
+	offset = 0
+	filldata = bytearray(main_partition.size)
 	
-	if (flen>0):
-		if (curr_partition == partition):
-			filldata[foffset:foffset+flen-1] = inbytes[0:flen-1]
+	for (dirpath, dirnames, filenames) in os.walk(folder):
+		files.extend([os.path.normpath(os.path.relpath(os.path.join(dirpath,item),folder)) for item in filenames])
+	
+	files.sort()
+	
+	print "FFS files found: %s" % files
+	
+	f_load = ""
+	h_enum = "#define FFS_FILE_LIST \\\n"
+	h_def = "#define FFS_FILE_METADATA \\\n"
+	
+	for file in files:
+		fullname = os.path.join(folder, file)
+		fh = open(fullname, 'rb')
+		inbytes = bytearray(fh.read())
+		flen = len(inbytes)
+		fh.close()
+		fn = re.sub("[^A-Za-z0-9]", "_", file)
+		file = "/" + file.replace(os.pathsep, "/")
+	
+		fstart = sadr
+		foffset = offset
+	
+		blocks = flen // increment
+		blocks += 1
+		blocks *= increment
+	
+		curr_partition = main_partition
+		check = file + "="
+	
+		for arg in sys.argv:
+			wlist = arg.split(' ')
+			for w in wlist:
+				if w.startswith(check):
+					opts = Option(w[len(check):])
+	
+					if (opts.growsize >= 0):
+						blocks = flen // opts.growsize
+						blocks += 1
+						blocks *= opts.growsize
+		
+					if ((opts.growsize == -2) and (opts.partition != "")):
+						blocks = flen // table[opts.partition].size
+						blocks += 1
+						blocks *= table[opts.partition].size
+		
+					if (opts.partition != ""):
+						fstart = table[opts.partition].offset
+						foffset = opts.offset
+						curr_partition = table[opts.partition]
+		
+					if (opts.raw_flash_offset >= 0):
+						fstart = 0
+						foffset = opts.raw_flash_offset
+						curr_partition = None
+	
+		h_enum += "%s, \\\n" % fn
+	
+		if (curr_partition is None):
+			h_def += "\t\t{ \"%s\", %s, %d, %d, %s, %d, %d, 0x%x }, \\\n" % (file, fn, flen, blocks, "NULL", 0, 0, foffset)
 		else:
-			outm.write(" 0x%x %s " % (fstart + foffset, fullname))
+			h_def += "\t\t{ \"%s\", %s, %d, %d, %s, %d, %d, 0x%x }, \\\n" % (file, fn, flen, blocks, "\"" + curr_partition.name + "\"", curr_partition.type, curr_partition.subtype, foffset)
+			if (foffset + blocks) > curr_partition.size:
+				raise Exception("File %s with grow is %d bytes, too large to fit in partition %s" % (file, blocks, curr_partition.name))
+	
+		if (flen>0):
+			if (curr_partition is main_partition):
+				filldata[foffset:foffset+flen-1] = inbytes[0:flen-1]
+			else:
+				f_load += " 0x%x %s " % (fstart + foffset, fullname)
+	
+		if (curr_partition is main_partition):
+			offset += blocks
+	
+		if offset > main_partition.size:
+			raise Exception("Filesystem data with grow space too large to fit in main partition %s" % main_partition.name)
+	
+	h_enum += "\n"
+	h_def += "\n"
+	
+	outh = open(output_h, 'w')
+	outm = open(output_m, 'w')
+	outb = open(output_b, 'wb')
+	
+	outh.write(h_enum)
+	outh.write(h_def)
+	
+	outm.write(f_load)
+	outm.write(" 0x%x %s " % (main_partition.offset, output_b))
+	
+	outb.write(filldata)
+	
+	outh.close()
+	outm.close()
+	outb.close()
 
-h_enum += "\n"
-h_def += "\n"
-
-outh.write(h_enum)
-outh.write(h_def)
-
-outm.write(" 0x%x %s " % (partition.offset, output_b))
-
-outb.write(filldata)
-
-outh.close()
-outm.close()
-outb.close()
+try:
+	MainCode()
+except Exception as ex:
+	print "Failed: %s\n" % ex

@@ -1,18 +1,21 @@
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "freertos/semphr.h"
-
-#include <dirent.h>
-#include "stdio.h"
-#include "string.h"
-#include "stdlib.h"
-#include "fcntl.h"
 #include "esp_vfs.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_attr.h"
 #include "esp_spi_flash.h"
 #include "esp_partition.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/xtensa_api.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+
+#include <dirent.h>
+#include "stdio.h"
+#include "string.h"
+#include "stdlib.h"
+#include "fcntl.h"
 #include "sys/errno.h"
 #include "sys/lock.h"
 #include "soc/uart_struct.h"
@@ -96,6 +99,8 @@
 	xSemaphoreGive(File_IO_Lock); \
 	return value;
 
+static portMUX_TYPE ffs_mux = portMUX_INITIALIZER_UNLOCKED;
+
 struct ffs_file_meta ffs_file_metadata[] = {
 	FFS_FILE_METADATA
 	{ NULL, 0, 0, 0, 0, 0, 0, 0 }
@@ -161,7 +166,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	         FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start,
 	         (mptrs[fd].partition_ptr == NULL) ? "" : " partition ",
 	         ffs_file_metadata[fd].plabel);
-	esp_err_t r;
+	esp_err_t 
 	if (mptrs[fd].partition_ptr == NULL) {
 		r = spi_flash_read(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	} else {
@@ -184,7 +189,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	ESP_LOGV("FFS", "Erasing %x bytes at %x%s%s",
 	         FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start,
 	         (mptrs[fd].partition_ptr == NULL) ? "" : " partition ",
-	         ffs_file_metadata[fd].plabel);
+	         ffs_file_metadata[fd].plabel
 	if (mptrs[fd].partition_ptr == NULL) {
 		r = spi_flash_erase_range(file_start_address_page_start, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	} else {
@@ -196,7 +201,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	ESP_LOGV("FFS", "Writing %x bytes at %x%s%s",
 	         FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start,
 	         (mptrs[fd].partition_ptr == NULL) ? "" : " partition ",
-	         ffs_file_metadata[fd].plabel);
+	         ffs_file_metadata[fd].plabel
 	if (mptrs[fd].partition_ptr == NULL) {
 		r = spi_flash_write(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	} else {
@@ -233,7 +238,7 @@ int ffs_interface_open(const char * path, int flags, int mode) {
 			errno = ENOENT;
 			FILE_METHOD_RETURN(-1, open, W)
 		}
-		// open ;)
+		// open ;
 		res = esp_partition_mmap(
 		          mptrs[ref->index].partition_ptr,
 		          ref->offset,

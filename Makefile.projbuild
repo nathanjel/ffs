@@ -1,6 +1,9 @@
+ifdef CONFIG_FFS_ENABLED
 
 ffs-flash: ffs-build $(ESPTOOLPY_SRC)
 	@echo "Flashing FFS files to serial port $(ESPPORT)..."
 	$(ESPTOOLPY_WRITE_FLASH) $(shell cat ${BUILD_DIR_BASE}/ffs-flash.map)
 
 .PHONY: ffs-flash
+
+endif
