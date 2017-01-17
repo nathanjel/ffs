@@ -10,7 +10,7 @@ comment "Use ffs-flash make target for flashing"
 
 config FFS_MOUNT_POINT
 	string "Mount point for ESP VFS integration"
-	default "/mount/files/"
+	default "/mount/files"
 
 config FFS_FILES_FOLDER_PATH
     string "Path to folder with files to be uploaded, relative to Project Path"

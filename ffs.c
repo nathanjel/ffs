@@ -20,6 +20,19 @@
 
 #ifdef CONFIG_FFS_ENABLED
 
+#if CONFIG_PINCORE_MODULE_ENABLED
+#include "pincore.h"
+#else
+#define PINCORE_START_CORE_PINNED_SECTION() \
+	do {
+#define PINCORE_STOP_CORE_PINNED_SECTION() \
+	} while(0)
+#define PINCORE_RETURN_FROM_SECTION(x) \
+	return x
+#define PINCORE_EXIT_FROM_SECTION() \
+	return
+#endif
+
 #include "ffs_files.h"
 #include "ffs_main.h"
 
@@ -30,44 +43,49 @@
 		FILE_METHOD_RETURN(-1, write, W);\
 	}
 
-#define DIR_METHOD_INIT() if (1) {
+#define DIR_METHOD_INIT() \
+	if (xSemaphoreTake(File_IO_Lock, portMAX_DELAY)==pdTRUE) { \
+		if (1) {
 
 #define DIR_METHOD_START(LOG) \
 	ESP_LOGV("FFS", "Entering (DIR %p) " #LOG, pdir); \
 	ffs_DIR * dir = (ffs_DIR*) pdir; \
-	xSemaphoreTake(File_IO_Lock, portMAX_DELAY); \
-	if (dir != NULL && (dir->magic_number == FFS_DIR_MAGIC_NUMBER)) {
+	if (xSemaphoreTake(File_IO_Lock, portMAX_DELAY)==pdTRUE) { \
+		if (dir != NULL && (dir->magic_number == FFS_DIR_MAGIC_NUMBER)) {
 
 #define DIR_METHOD_STOP_RETURN(ret, LOG) \
-		ESP_LOGV("FFS", "Finishing (DIR %p) " #LOG, pdir); \
-		xSemaphoreGive(File_IO_Lock); \
-		return ret; \
-	} else { \
-		ESP_LOGW("FFS", "Invalid call (DIR %p) " #LOG, pdir); \
-		xSemaphoreGive(File_IO_Lock); \
-		errno = EBADF; \
-		return -1; \
-	}
+			ESP_LOGV("FFS", "Finishing (DIR %p) " #LOG, pdir); \
+			xSemaphoreGive(File_IO_Lock); \
+			return ret; \
+		} else { \
+			ESP_LOGW("FFS", "Invalid call (DIR %p) " #LOG, pdir); \
+			xSemaphoreGive(File_IO_Lock); \
+			errno = EBADF; \
+			return -1; \
+		} \
+	} else { errno = EBUSY; return -1; }
 
 #define DIR_METHOD_STOP_RETURN_PTR(ret, LOG) \
-		ESP_LOGV("FFS", "Finishing (DIR %p) " #LOG, pdir); \
-		xSemaphoreGive(File_IO_Lock); \
-		return ret; \
-	} else { \
-		ESP_LOGW("FFS", "Invalid call (DIR %p) " #LOG, pdir); \
-		xSemaphoreGive(File_IO_Lock); \
-		return NULL; \
-	}
+			ESP_LOGV("FFS", "Finishing (DIR %p) " #LOG, pdir); \
+			xSemaphoreGive(File_IO_Lock); \
+			return ret; \
+		} else { \
+			ESP_LOGW("FFS", "Invalid call (DIR %p) " #LOG, pdir); \
+			xSemaphoreGive(File_IO_Lock); \
+			return NULL; \
+		} \
+	} else { errno = EBUSY; return NULL; }
 
 #define DIR_METHOD_STOP_RETURN_NONE(LOG) \
-		ESP_LOGV("FFS", "Finishing (DIR %p) " #LOG, pdir); \
-		xSemaphoreGive(File_IO_Lock); \
-		return; \
-	} else { \
-		ESP_LOGW("FFS", "Invalid call (DIR %p) " #LOG, pdir); \
-		xSemaphoreGive(File_IO_Lock); \
-		return; \
-	}
+			ESP_LOGV("FFS", "Finishing (DIR %p) " #LOG, pdir); \
+			xSemaphoreGive(File_IO_Lock); \
+			return; \
+		} else { \
+			ESP_LOGW("FFS", "Invalid call (DIR %p) " #LOG, pdir); \
+			xSemaphoreGive(File_IO_Lock); \
+			return; \
+		} \
+	} else { errno = EBUSY; return; }
 
 #define DIR_METHOD_RETURN(value,LOG,LOGCAT) \
 	ESP_LOG##LOGCAT("FFS", "Returning (DIR %p, value %d, errno %d) " #LOG, pdir, value, errno); \
@@ -76,20 +94,21 @@
 
 #define FILE_METHOD_START(LOG) \
 	ESP_LOGV("FFS", "Entering (fd %d) " #LOG, fd); \
-	xSemaphoreTake(File_IO_Lock, portMAX_DELAY); \
-	if ((fd >= 0) && (fd < ffs_end_of_list) \
-		&& (mptrs[fd].mmap_ptr != NULL)) {
+	if(xSemaphoreTake(File_IO_Lock, portMAX_DELAY) == pdTRUE) { \
+		if ((fd >= 0) && (fd < ffs_end_of_list) \
+			&& (mptrs[fd].mmap_ptr != NULL)) {
 
 #define FILE_METHOD_STOP_RETURN(ret, LOG) \
-		ESP_LOGV("FFS", "Finishing (fd %d) " #LOG, fd); \
-		xSemaphoreGive(File_IO_Lock); \
-		return ret; \
-	} else { \
-		ESP_LOGW("FFS", "Invalid call (fd %d) " #LOG, fd); \
-		xSemaphoreGive(File_IO_Lock); \
-		errno = EBADF; \
-		return -1; \
-	}
+			ESP_LOGV("FFS", "Finishing (fd %d) " #LOG, fd); \
+			xSemaphoreGive(File_IO_Lock); \
+			return ret; \
+		} else { \
+			ESP_LOGW("FFS", "Invalid call (fd %d) " #LOG, fd); \
+			xSemaphoreGive(File_IO_Lock); \
+			errno = EBADF; \
+			return -1; \
+		} \
+	} else { errno = EBUSY; return -1; }
 
 #define FILE_METHOD_RETURN(value,LOG,LOGCAT) \
 	ESP_LOG##LOGCAT("FFS", "Returning (fd %d, value %d, errno %d) " #LOG, fd, value, errno); \
@@ -162,12 +181,14 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	         (mptrs[fd].partition_ptr == NULL) ? "" : " partition ",
 	         ffs_file_metadata[fd].plabel);
 	esp_err_t r;
+	PINCORE_START_CORE_PINNED_SECTION();
 	if (mptrs[fd].partition_ptr == NULL) {
 		r = spi_flash_read(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	} else {
 		r = esp_partition_read(mptrs[fd].partition_ptr, file_start_address_page_start,
 		                       tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	}
+	PINCORE_STOP_CORE_PINNED_SECTION();
 	FILE_CHECK_IF_SPI_OK(r)
 	// compare
 	ESP_LOGV("FFS", "Comparing %x bytes at %x", bytes_to_write, file_start_address_in_partition);
@@ -185,24 +206,28 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	         FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start,
 	         (mptrs[fd].partition_ptr == NULL) ? "" : " partition ",
 	         ffs_file_metadata[fd].plabel);
+	PINCORE_START_CORE_PINNED_SECTION();
 	if (mptrs[fd].partition_ptr == NULL) {
 		r = spi_flash_erase_range(file_start_address_page_start, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	} else {
 		r = esp_partition_erase_range(mptrs[fd].partition_ptr,
 		                              file_start_address_page_start, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	}
+	PINCORE_STOP_CORE_PINNED_SECTION();
 	FILE_CHECK_IF_SPI_OK(r)
 	// write
 	ESP_LOGV("FFS", "Writing %x bytes at %x%s%s",
 	         FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start,
 	         (mptrs[fd].partition_ptr == NULL) ? "" : " partition ",
 	         ffs_file_metadata[fd].plabel);
+	PINCORE_START_CORE_PINNED_SECTION();
 	if (mptrs[fd].partition_ptr == NULL) {
 		r = spi_flash_write(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	} else {
 		r = esp_partition_write(mptrs[fd].partition_ptr,
 		                        file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	}
+	PINCORE_STOP_CORE_PINNED_SECTION();
 	FILE_CHECK_IF_SPI_OK(r)
 	// release
 	free(tmp);
@@ -293,6 +318,7 @@ ssize_t ffs_interface_read(int fd, void * dst, size_t size) {
 	}
 	if (maxread) {
 		if (mptrs[fd].mmap_ptr == (void*)0xffffffff) {	// no mmap
+			PINCORE_START_CORE_PINNED_SECTION();
 			if (mptrs[fd].partition_ptr == NULL) { // no partition - raw access
 				spi_flash_read(ffs_file_metadata[fd].offset + mptrs[fd].position,
 				               dst, maxread);
@@ -301,6 +327,7 @@ ssize_t ffs_interface_read(int fd, void * dst, size_t size) {
 				    mptrs[fd].partition_ptr, ffs_file_metadata[fd].offset + mptrs[fd].position,
 				    dst, maxread);
 			}
+			PINCORE_STOP_CORE_PINNED_SECTION();
 		} else {
 			memcpy(dst, mptrs[fd].mmap_ptr + mptrs[fd].position, maxread);
 		}
@@ -351,13 +378,12 @@ int ffs_interface_stat(const char * path, struct stat * st) {
 }
 
 DIR* ffs_interface_opendir(const char* name) {
-	xSemaphoreTake(File_IO_Lock, portMAX_DELAY);
 	ffs_DIR * pdir = NULL;
+	DIR_METHOD_INIT()
 	if (name == NULL) {
 		errno = ENOENT;
 		DIR_METHOD_RETURN(0, opendir, E)
 	}
-	DIR_METHOD_INIT()
 	struct ffs_file_meta * ptr = ffs_get_file_meta(name, strlen(name), true, 0);
 	if (ptr == NULL) {
 		errno = ENOENT;
@@ -427,8 +453,8 @@ int ffs_interface_readdir_r(DIR * pdir, struct dirent * entry, struct dirent** o
 
 long ffs_interface_telldir(DIR * pdir) {
 	DIR_METHOD_START(telldir)
-	return dir->pidx;
-	DIR_METHOD_STOP_RETURN(0, telldir)
+	;
+	DIR_METHOD_STOP_RETURN(dir->pidx, telldir)
 }
 
 void ffs_interface_seekdir(DIR * pdir, long offset) {
