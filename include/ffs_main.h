@@ -30,7 +30,6 @@ typedef struct {
 
 struct ffs_file_meta {
 	char * name;
-	ffs_file_index index;
 	unsigned int init_length;
 	unsigned int max_length;
 	const char * plabel;
@@ -40,10 +39,11 @@ struct ffs_file_meta {
 };
 
 struct ffs_open_file {
-	esp_partition_t * partition_ptr;
-	void * mmap_ptr;
-	size_t position;
+	ffs_file_index pidx;
 	int flags;
+	size_t position;
+	void * mmap_ptr;
+	esp_partition_t * partition_ptr;
 	spi_flash_mmap_handle_t mmap_handle;
 };
 

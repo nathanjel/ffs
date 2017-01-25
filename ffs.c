@@ -83,8 +83,8 @@
 	FFS_CLEAR_ERRNO_ON_ENTRY(); \
 	ESP_LOGV("FFS", "Entering (fd %d) " #LOG, fd); \
 	if(xSemaphoreTake(File_IO_Lock, portMAX_DELAY) == pdTRUE) { \
-		if ((fd >= 0) && (fd < ffs_end_of_list) \
-			&& (mptrs[fd].mmap_ptr != NULL)) {
+		if ((fd >= 0) && (fd < CONFIG_FFS_MAX_OPEN_FILES) \
+			&& (mptrs[fd].pidx != ffs_end_of_list)) {
 
 #define FILE_METHOD_STOP_RETURN(ret, LOG) \
 			ESP_LOGV("FFS", "Finishing (fd %d) " #LOG, fd); \
@@ -105,7 +105,7 @@
 
 struct ffs_file_meta ffs_file_metadata[] = {
 	FFS_FILE_METADATA
-	{ NULL, 0, 0, 0, 0, 0, 0, 0 }
+	{ NULL, 0, 0, 0, 0, 0, 0 }
 };
 
 struct ffs_file_meta * ffs_get_file_meta(const char * name, size_t xstrlen, bool seek_directory, ffs_file_index startidx) {
@@ -135,7 +135,7 @@ struct ffs_file_meta * ffs_get_file_meta(const char * name, size_t xstrlen, bool
 
 SemaphoreHandle_t File_IO_Lock;
 
-struct ffs_open_file mptrs[ffs_end_of_list];
+struct ffs_open_file mptrs[CONFIG_FFS_MAX_OPEN_FILES];
 
 size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	size_t bytes_to_write = 0;
@@ -151,10 +151,10 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 		errno = ENOMEM;
 		FILE_METHOD_RETURN(-1, write, E)
 	}
-	size_t space_left_for_file = ffs_file_metadata[fd].max_length
+	size_t space_left_for_file = ffs_file_metadata[mptrs[fd].pidx].max_length
 	                             - mptrs[fd].position;
 	size_t file_start_address_in_partition
-	    = ffs_file_metadata[fd].offset + mptrs[fd].position;
+	    = ffs_file_metadata[mptrs[fd].pidx].offset + mptrs[fd].position;
 	size_t file_start_address_page_start =
 	    file_start_address_in_partition & ~(FFS_ESP_FLASH_WRITE_BOUNDARY - 1);
 	size_t file_start_address_within_page =
@@ -167,7 +167,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	ESP_LOGV("FFS", "Reading %x bytes at %x%s%s",
 	         FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start,
 	         (mptrs[fd].partition_ptr == NULL) ? "" : " partition ",
-	         ffs_file_metadata[fd].plabel);
+	         ffs_file_metadata[mptrs[fd].pidx].plabel);
 	esp_err_t r;
 	if (mptrs[fd].partition_ptr == NULL) {
 		r = spi_flash_read(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
@@ -191,7 +191,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	ESP_LOGV("FFS", "Erasing %x bytes at %x%s%s",
 	         FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start,
 	         (mptrs[fd].partition_ptr == NULL) ? "" : " partition ",
-	         ffs_file_metadata[fd].plabel);
+	         ffs_file_metadata[mptrs[fd].pidx].plabel);
 	if (mptrs[fd].partition_ptr == NULL) {
 		r = spi_flash_erase_range(file_start_address_page_start, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	} else {
@@ -203,7 +203,7 @@ size_t ffs_interface_write(int fd, const void * data, size_t size) {
 	ESP_LOGV("FFS", "Writing %x bytes at %x%s%s",
 	         FFS_ESP_FLASH_WRITE_BOUNDARY, file_start_address_page_start,
 	         (mptrs[fd].partition_ptr == NULL) ? "" : " partition ",
-	         ffs_file_metadata[fd].plabel);
+	         ffs_file_metadata[mptrs[fd].pidx].plabel);
 	if (mptrs[fd].partition_ptr == NULL) {
 		r = spi_flash_write(file_start_address_page_start, tmp, FFS_ESP_FLASH_WRITE_BOUNDARY);
 	} else {
@@ -227,57 +227,69 @@ int ffs_interface_open(const char * path, int flags, int mode) {
 			errno = ENOENT;
 			FILE_METHOD_RETURN(-1, open, W)
 		}
-		fd = ref->index;
-		if (mptrs[ref->index].mmap_ptr != NULL)  {
-			errno = EBUSY;
+		fd = 0;
+		while ((fd < CONFIG_FFS_MAX_OPEN_FILES) && (mptrs[fd].pidx != ffs_end_of_list)) {
+			fd++;
+		}
+		if (fd == CONFIG_FFS_MAX_OPEN_FILES) {
+			errno = ENFILE;
 			FILE_METHOD_RETURN(-1, open, W)
+		}
+		int local_pidx = ref - ffs_file_metadata;
+		for (int i = 0; i < CONFIG_FFS_MAX_OPEN_FILES; i++) {
+			if (mptrs[i].pidx == local_pidx)  {
+				errno = EBUSY;
+				FILE_METHOD_RETURN(-1, open, W)
+			}
 		}
 		// first establish the partition
 		esp_err_t res = ESP_FAIL;
 		if (ref->plabel != NULL) {	// do we have a partition defined?
-			mptrs[ref->index].partition_ptr = (esp_partition_t *)
-			                                  esp_partition_find_first(ref->ptype, ref->pstype, ref->plabel);
-			if (mptrs[ref->index].partition_ptr == NULL) {
+			mptrs[fd].partition_ptr = (esp_partition_t *)
+			                          esp_partition_find_first(ref->ptype, ref->pstype, ref->plabel);
+			if (mptrs[fd].partition_ptr == NULL) {
 				errno = ENOENT;
 				FILE_METHOD_RETURN(-1, open, W)
 			}
 			// open ;
 			res = esp_partition_mmap(
-			          mptrs[ref->index].partition_ptr,
+			          mptrs[fd].partition_ptr,
 			          ref->offset,
 			          ref->max_length,
 			          SPI_FLASH_MMAP_DATA,
-			          (const void **)(&(mptrs[ref->index].mmap_ptr)),
-			          &(mptrs[ref->index].mmap_handle)
+			          (const void **)(&(mptrs[fd].mmap_ptr)),
+			          &(mptrs[fd].mmap_handle)
 			      );
 		}
 		if (res != ESP_OK) {
 			// no mmap, will resort to direct partition reads
-			mptrs[ref->index].mmap_ptr = (void*)0xffffffff;
+			mptrs[fd].mmap_ptr = (void*)0xffffffff;
 		}
-		mptrs[ref->index].position = 0;
-		mptrs[ref->index].flags = flags + 1;	// to get FREAD/FWRITE
+		mptrs[fd].position = 0;
+		mptrs[fd].flags = flags + 1;	// to get FREAD/FWRITE
+		mptrs[fd].pidx = local_pidx;
 		// and let it go :)
-		FILE_METHOD_RETURN(ref->index, open, D)
+		FILE_METHOD_RETURN(fd, open, D)
 	} else { errno = EBUSY; return -1; }
 }
 
-static void ffs_setstat(int fd, struct stat * st) {
-	st->st_ino = fd + FFS_FILE_INODE_PREFIX;
+static void ffs_setstat(struct ffs_file_meta * ref, struct stat * st) {
+	st->st_ino = (ref - ffs_file_metadata) + FFS_FILE_INODE_PREFIX;
 	st->st_mode = 0666;
-	st->st_spare1 = ffs_file_metadata[fd].init_length;
-	st->st_size = ffs_file_metadata[fd].max_length;
+	st->st_spare1 = ref->init_length;
+	st->st_size = ref->max_length;
 }
 
 int ffs_interface_fstat(int fd, struct stat * st) {
 	FILE_METHOD_START(fstat)
 	memset(st, 0, sizeof(struct stat));
-	ffs_setstat(fd, st);
+	ffs_setstat(ffs_file_metadata + mptrs[fd].pidx, st);
 	FILE_METHOD_STOP_RETURN(0, fstat)
 }
 
 int ffs_interface_close(int fd) {
 	FILE_METHOD_START(close)
+	mptrs[fd].pidx = ffs_end_of_list;
 	mptrs[fd].partition_ptr = NULL;
 	mptrs[fd].mmap_ptr = NULL;
 	mptrs[fd].flags = 0;
@@ -297,17 +309,17 @@ ssize_t ffs_interface_read(int fd, void * dst, size_t size) {
 		errno = EACCES;
 		FILE_METHOD_RETURN(-1, read, W)
 	}
-	if (mptrs[fd].position + maxread > ffs_file_metadata[fd].max_length) {
-		maxread = ffs_file_metadata[fd].max_length - mptrs[fd].position;
+	if (mptrs[fd].position + maxread > ffs_file_metadata[mptrs[fd].pidx].max_length) {
+		maxread = ffs_file_metadata[mptrs[fd].pidx].max_length - mptrs[fd].position;
 	}
 	if (maxread) {
 		if (mptrs[fd].mmap_ptr == (void*)0xffffffff) {	// no mmap
 			if (mptrs[fd].partition_ptr == NULL) { // no partition - raw access
-				spi_flash_read(ffs_file_metadata[fd].offset + mptrs[fd].position,
+				spi_flash_read(ffs_file_metadata[mptrs[fd].pidx].offset + mptrs[fd].position,
 				               dst, maxread);
 			} else { // access thru partition (allows encryption)
 				esp_partition_read(
-				    mptrs[fd].partition_ptr, ffs_file_metadata[fd].offset + mptrs[fd].position,
+				    mptrs[fd].partition_ptr, ffs_file_metadata[mptrs[fd].pidx].offset + mptrs[fd].position,
 				    dst, maxread);
 			}
 		} else {
@@ -329,13 +341,13 @@ off_t ffs_interface_lseek(int fd, off_t size, int mode) {
 		newpos += size;
 		break;
 	case SEEK_END:
-		newpos = ffs_file_metadata[fd].max_length + size;
+		newpos = ffs_file_metadata[mptrs[fd].pidx].max_length + size;
 		break;
 	default:
 		errno = EINVAL;
 		FILE_METHOD_RETURN(-1, lseek, W)
 	}
-	if (newpos < 0 || newpos > ffs_file_metadata[fd].max_length) {
+	if (newpos < 0 || newpos > ffs_file_metadata[mptrs[fd].pidx].max_length) {
 		errno = ESPIPE;
 		FILE_METHOD_RETURN(-1, lseek, W)
 	} else {
@@ -354,9 +366,8 @@ int ffs_interface_stat(const char * path, struct stat * st) {
 			errno = ENOENT;
 			FILE_METHOD_RETURN(-1, stat, W)
 		}
-		fd = ref->index;
 		memset(st, 0, sizeof(struct stat));
-		ffs_setstat(fd, st);
+		ffs_setstat(ref, st);
 		FILE_METHOD_RETURN(0, stat, D)
 	} else { errno = EBUSY; return -1; }
 }
@@ -391,7 +402,7 @@ DIR* ffs_interface_opendir(const char* name) {
 
 #define FFS_SET_DIRENT(de) \
 	de.d_type = DT_REG; \
-	de.d_ino = ptr->index + FFS_DIR_INODE_PREFIX; \
+	de.d_ino = (ptr - ffs_file_metadata) + FFS_DIR_INODE_PREFIX; \
 	strcpy(de.d_name, ptr->name + (dir->dirname_end_ptr - dir->dirname_ptr) + 1); \
 	char * w = strchr(de.d_name, '/'); \
 	if (w) { \
@@ -400,7 +411,7 @@ DIR* ffs_interface_opendir(const char* name) {
 	}
 
 #define FFS_FIND_NEXT_ENTRY(de) \
-	dir->pidx = ptr->index + 1; \
+	dir->pidx = (ptr - ffs_file_metadata) + 1; \
 	if (de.d_type == DT_DIR) { \
 		while ((dir->pidx < ffs_end_of_list) \
 			&& (strncmp(ffs_file_metadata[dir->pidx].name + (dir->dirname_end_ptr - dir->dirname_ptr) + 1, de.d_name, w - de.d_name) == 0) \
@@ -481,7 +492,9 @@ esp_vfs_t ffs_vfs = {
 
 void ffs_initialize() {
 	File_IO_Lock = xSemaphoreCreateMutex();
-	memset(mptrs, 0, sizeof (struct ffs_open_file) * ffs_end_of_list);
+	for (int i = 0; i < CONFIG_FFS_MAX_OPEN_FILES; i++) {
+		mptrs[i].pidx = ffs_end_of_list;
+	}
 	ESP_ERROR_CHECK(esp_vfs_register(CONFIG_FFS_MOUNT_POINT, &ffs_vfs, NULL));
 }
 

@@ -12,6 +12,10 @@ config FFS_MOUNT_POINT
 	string "Mount point for ESP VFS integration"
 	default "/mount/files"
 
+config FFS_MAX_OPEN_FILES
+	int "Maximum number of open files"
+	default 8
+
 config FFS_FILES_FOLDER_PATH
     string "Path to folder with files to be uploaded, relative to Project Path"
     default "files"
@@ -26,9 +30,8 @@ config FFS_FILES_DEF_GROWSIZE
 	help
 		Default space boundary left for files to grow. Files will be left
 		up to (boundary_size - (file_size mod boundary)) bytes to grow.
-		Eg a 5913 bytes file with 4096 boundary can grow to 2279 bytes.
-
-		With 0x1000 (4K bytes) boundary, the write access is most optimal.
+		Eg a 5913 bytes file with 4096 boundary can grow by 2279 bytes
+		up to 8192 bytes.
 
 config FFS_FILES_OPTIONS
 	string "Additional options to file loader"
@@ -37,6 +40,7 @@ config FFS_FILES_OPTIONS
 		This allows You to specifically control how the files are loaded,
 		the size they have to grow and specific load location, even outside
 		the partition. You can specify for multiple files, separated by space.
+		You can also use wildcards
 
 		Specify loading point
 		1.
@@ -60,13 +64,13 @@ config FFS_FILES_OPTIONS
 		Controls grow size for files loaded to main configured partition
 
 		Examples:
-		data1.out=g:4096 data2.out=p:data_files,g:1024
-		data3.out=r:0x100000
-		data4.out=p:ota_1,g:max
+		/data1.out=g:4096 /data2.out=p:data_files,g:1024
+		/folder/data3.out=r:0x100000
+		/ota/data4.out=p:ota_1,g:max
+		/*/*16k-file.bin=g:0x4000
 
 		WARNING:
-		File position and size conflicts internally and within the wider
-		flash memory are NOT (yet) checked.
+		Conflicts within flash memory are NOT (yet) checked.
 
 endif
 

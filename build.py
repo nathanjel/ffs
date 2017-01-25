@@ -4,6 +4,7 @@ import sys
 import os
 import collections
 import re
+import fnmatch
 
 ## check
 if (len(sys.argv)<8):
@@ -20,12 +21,17 @@ sys.argv[0:] = sys.argv[1:]
 from gen_esp32part import PartitionTable, PartitionDefinition
 
 class Option(object):
+	regex = None
 	partition = ""
 	offset = 0
 	growsize = -1
 	raw_flash_offset = -1
 
-	def __init__(self, input):
+	def fits(self, file):
+		return self.regex.match(file) is not None
+
+	def __init__(self, input, pattern):
+		self.regex = re.compile(fnmatch.translate(pattern))
 		opts = input.split(',');
 		for opt in opts:
 			if opt[1:2] == ':':
@@ -46,6 +52,7 @@ def MainCode():
 	## init
 	files = []
 	partitions = []
+	controls = []
 	
 	## parameters
 	folder = sys.argv[1]
@@ -75,6 +82,12 @@ def MainCode():
 	f_load = ""
 	h_enum = "#define FFS_FILE_LIST \\\n"
 	h_def = "#define FFS_FILE_METADATA \\\n"
+
+	optprog = re.compile('(((\S|\\\s)+)=((\\\s|\S)+))')
+	args = ' '.join(sys.argv[8:])
+
+	for m in re.finditer(optprog, args):
+		controls.append(Option(m.group(4), m.group(2)))
 	
 	for file in files:
 		fullname = os.path.join(folder, file)
@@ -93,40 +106,38 @@ def MainCode():
 		blocks *= increment
 	
 		curr_partition = main_partition
-		check = file + "="
 	
-		for arg in sys.argv:
-			wlist = arg.split(' ')
-			for w in wlist:
-				if w.startswith(check):
-					opts = Option(w[len(check):])
+		for opts in controls:
+			if opts.fits(file):
 	
-					if (opts.growsize >= 0):
-						blocks = flen // opts.growsize
-						blocks += 1
-						blocks *= opts.growsize
+				if (opts.growsize >= 0):
+					blocks = flen // opts.growsize
+					blocks += 1
+					blocks *= opts.growsize
 		
-					if ((opts.growsize == -2) and (opts.partition != "")):
-						blocks = flen // table[opts.partition].size
-						blocks += 1
-						blocks *= table[opts.partition].size
+				if ((opts.growsize == -2) and (opts.partition != "")):
+					blocks = flen // table[opts.partition].size
+					blocks += 1
+					blocks *= table[opts.partition].size
 		
-					if (opts.partition != ""):
-						fstart = table[opts.partition].offset
-						foffset = opts.offset
-						curr_partition = table[opts.partition]
+				if (opts.partition != ""):
+					fstart = table[opts.partition].offset
+					foffset = opts.offset
+					curr_partition = table[opts.partition]
 		
-					if (opts.raw_flash_offset >= 0):
-						fstart = 0
-						foffset = opts.raw_flash_offset
-						curr_partition = None
+				if (opts.raw_flash_offset >= 0):
+					fstart = 0
+					foffset = opts.raw_flash_offset
+					curr_partition = None
+
+				break
 	
 		h_enum += "%s, \\\n" % fn
 	
 		if (curr_partition is None):
-			h_def += "\t\t{ \"%s\", %s, %d, %d, %s, %d, %d, 0x%x }, \\\n" % (file, fn, flen, blocks, "NULL", 0, 0, foffset)
+			h_def += "\t\t{ \"%s\", %d, %d, %s, %d, %d, 0x%x }, \\\n" % (file, flen, blocks, "NULL", 0, 0, foffset)
 		else:
-			h_def += "\t\t{ \"%s\", %s, %d, %d, %s, %d, %d, 0x%x }, \\\n" % (file, fn, flen, blocks, "\"" + curr_partition.name + "\"", curr_partition.type, curr_partition.subtype, foffset)
+			h_def += "\t\t{ \"%s\", %d, %d, %s, %d, %d, 0x%x }, \\\n" % (file, flen, blocks, "\"" + curr_partition.name + "\"", curr_partition.type, curr_partition.subtype, foffset)
 			if (foffset + blocks) > curr_partition.size:
 				raise Exception("File %s with grow is %d bytes, too large to fit in partition %s" % (file, blocks, curr_partition.name))
 	
