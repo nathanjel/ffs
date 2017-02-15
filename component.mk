@@ -19,7 +19,7 @@ $(BUILD_DIR_BASE)/ffs-flash.map: $(COMPONENT_BUILD_DIR)/ffs_files.h
 
 $(BUILD_DIR_BASE)/ffs.binary: $(COMPONENT_BUILD_DIR)/ffs_files.h
 
-$(COMPONENT_BUILD_DIR)/ffs_files.h: $(PROJECT_PATH)/$(call dequote,$(CONFIG_FFS_FILES_FOLDER_PATH)) $(COMPONENT_PATH)/sdkconfig
+$(COMPONENT_BUILD_DIR)/ffs_files.h: $(PROJECT_PATH)/$(call dequote,$(CONFIG_FFS_FILES_FOLDER_PATH)) $(PROJECT_PATH)/sdkconfig
 	$(PYTHON) $(COMPONENT_PATH)/build.py \
 		$(IDF_PATH)/components/partition_table/ \
 		$(PROJECT_PATH)/$(call dequote,$(CONFIG_FFS_FILES_FOLDER_PATH)) \
